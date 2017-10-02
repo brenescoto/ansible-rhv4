@@ -1,0 +1,121 @@
+---
+- hosts: 10.60.57.28
+  remote_user: root
+  #ansible_user: root
+  #ansible_ssh_pass: r3dh4t1!
+  vars:
+    path_files: /files_ansible/wl12c
+    rpm_name: jdk-8u144-linux-x64.rpm
+    jar_file: fmw_12.2.1.2.0_wls.jar
+    silent_file: res.rsp
+    path_tar: /var/
+    java_name: /usr/java/jdk1.8.0_144
+    #Oracle os user and group
+    oracle_user: 'oracle'
+    oracle_group: 'oinstall'
+    #Software and configuration main directory
+    oracle_base: /home/admin/weblogic/WDLS
+    domain_security: /home/admin/weblogic/WDLS/domains/sat_domain/servers/AdminServer/security
+    oracle_os_user_pass: welcome1
+    middleware_home: '{{oracle_base}}/oracle_home'
+    middleware_common_home: '{{ middleware_home }}/oracle_common'
+    mw_installer_folder: '{{ oracle_base }}/installer'
+
+  tasks:
+  - name: Pasar archivo JDK a host destino
+    copy: src={{ path_files }}/{{ rpm_name }} dest={{ path_tar }} owner=root group=root
+
+  - name: Instalacion de rpm a traves de yum command
+    command: "yum install -y {{ path_tar }}{{ rpm_name }}"
+
+  - name: Configurar alternatives de java
+    command: 'alternatives --install "/usr/bin/java" "java" "/usr/bin/java" 2000'
+
+  - name: Creacion de grupos para Oracle
+    group: name={{ oracle_group }} state=present
+
+  - name: Creacion de usuario para Oracle
+    user: name={{ oracle_user }} groups={{ oracle_group }} password={{ oracle_os_user_pass }}
+
+  - name: Creacion de carpeta de oracle de silent mode
+    file: state=directory path='{{ oracle_base }}' owner='{{ oracle_user }}' group='{{ oracle_group }}'
+
+  - name: Creacion de carpeta de oracle home de silent mode
+    file: state=directory path='{{ oracle_base }}/oracle_home' owner='{{ oracle_user }}' group='{{ oracle_group }}'
+
+  - name: Generando archivo de variables de entorno
+    copy:
+      content: |
+                #!/bin/bash
+                export JDK_HOME={{ java_name }}
+                export JAVA_HOME={{ java_name }}
+                export JRE_HOME={{ java_name }}/jre
+                export PATH=$PATH:{{ java_name }}/bin:{{ java_name }}/jre/bin
+      dest: /etc/profile.d/oracle_jdk.sh
+      owner: '{{ oracle_user }}'
+      group: '{{ oracle_group }}'
+
+  - name: Creacion de carpeta de instalacion
+    file: state=directory path={{ oracle_base }} owner='{{ oracle_user }}' group='{{ oracle_group }}'
+
+  - name: Generarndo archivo de oraInst.loc
+    copy:
+      content: |
+                inventory_loc={{ oracle_base }}
+                inst_group={{ oracle_group }}
+      dest: '{{ oracle_base }}/oraInst.loc'
+      owner: '{{ oracle_user }}'
+      group: '{{ oracle_group }}'
+
+  - name: Ejecutando inicializacion de variables de entorno
+    command: "chmod 755 /etc/profile.d/oracle_jdk.sh"
+
+  - name: Iniciando variables de entorno java
+    command: "sh /etc/profile.d/oracle_jdk.sh"
+
+  - name: Pasar archivo JAR a host destino
+    copy: src={{ path_files }}/{{ jar_file }} dest={{ path_tar }} owner={{ oracle_user }} group={{ oracle_group }}
+
+  - name: Pasar archivo RESP a host destino
+    copy: src={{ path_files }}/{{ silent_file }} dest={{ path_tar }} owner={{ oracle_user }} group={{ oracle_group }}
+
+  - name: Instalacion de FMW 12c en silent mode
+    become: yes
+    become_user: '{{oracle_user}}'
+    command: "{{ java_name }}/bin/java -Xms1024m -Xmx1024m -jar {{ path_tar }}{{ jar_file }} -silent -responseFile {{ path_tar }}{{silent_file}} -invPtrLoc {{ oracle_base }}/oraInst.loc"
+
+  - name: Creacion de carpeta de installer
+    file: state=directory path='{{ mw_installer_folder }}' owner='{{ oracle_user }}' group='{{ oracle_group }}'
+
+  - name: Copia de archivo py de WLST
+    template: src={{path_files}}/create-domain.py dest={{ mw_installer_folder }} owner={{ oracle_user }} group={{ oracle_group }}
+
+  - name: Creacion de carpeta de oracle domain
+    file: state=directory path='{{ oracle_base }}/domains' owner='{{ oracle_user }}' group='{{ oracle_group }}'
+
+  - name: Ejecucion de WLST para dominio wl12c
+    shell: "{{ middleware_common_home }}/common/bin/wlst.sh {{ mw_installer_folder }}/create-domain.py"
+
+  - name: Creacion de carpeta de domain para seguridad boot.properties
+    file: state=directory path='{{ domain_security }}'
+
+  - name: Ejecutando inicializacion de variables de entorno
+    command: "chmod 755 {{ oracle_base }}/domains/sat_domain/startWebLogic.sh"
+
+  - name: Iniciando variables de entorno java
+    shell: "{{ oracle_base }}/domains/sat_domain/startWebLogic.sh"
+    
+  - name: Copia de archivo boot.properties
+    template: src={{path_files}}/boot.properties dest={{ domain_security }}/ 
+
+  - name: Inicio de dominio SAT.
+    shell: "nohup {{ oracle_base }}/domains/sat_domain/./startWebLogic.sh &"
+
+  - name: Limpiando el archivo de instalacion JDK
+    file: state=absent path={{ path_tar }}{{ rpm_name }}
+
+  - name: Limpiando el archivo de instalacion JAR wl12c
+    file: state=absent path={{ path_tar }}{{ jar_file }}
+
+  - name: Limpiando el archivo de instalacion silent-mode
+    file: state=absent path={{ path_tar }}{{ silent_file }}
